@@ -1,58 +1,123 @@
 import { useState } from "react";
-import type { TrainingSet, Task } from "./domain";
-import { findTask } from "./domain";
+import type { TrainingSet, Answer, Task } from "./domain";
+import { getProgress } from "./domain";
 import { TaskList } from "./components/TaskList";
 import { TaskCard } from "./components/TaskCard";
+import { Overview } from "./components/Overview";
 
-// Локальный набор из A1
-const mainSet: TrainingSet = {
-  id: "web-basics",
-  title: "Основы веб-программирования",
-  tasks: [
-    {
-      id: "ts-1",
-      kind: "single-choice",
-      topic: "typescript",
-      prompt: "Что выведет этот JavaScript-код?",
-      code: 'console.log("10" * 5);',
-      options: [
-        { id: "a", label: "105" },
-        { id: "b", label: "50" },
-        { id: "c", label: "Ошибка" },
-      ],
-    },
-    {
-      id: "react-1",
-      kind: "short-text",
-      topic: "react",
-      prompt: "Объясните, чем props компонента отличаются от его состояния.",
-    },
-  ],
-};
+import trainingSetData from "../../course/data/training-set.json";
+const mainSet = trainingSetData as TrainingSet;
 
 export default function App() {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, Answer>>({});
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [status, setStatus] = useState<"in-progress" | "submitted">("in-progress");
+  const [showConfirm, setShowConfirm] = useState(false);
 
-  const selected: Task | undefined = selectedId
-    ? findTask(mainSet, selectedId)
-    : undefined;
+  const tasks = mainSet.tasks;
+  const currentTask = tasks[currentIndex];
+
+  // Производное значение прогресса
+  const progress = getProgress(mainSet, Object.values(answers));
+
+  // Вспомогательная функция для проверки заполненности (с учетом пробелов)
+  const isAnswered = (task: Task, ans: Answer | undefined) => {
+    if (!ans) return false;
+    if (task.kind === "short-text" && ans.kind === "short-text") {
+      return ans.text.trim().length > 0;
+    }
+    return true;
+  };
+
+  // Список номеров пропущенных заданий
+  const missedTasks = tasks
+    .map((t, i) => (!isAnswered(t, answers[t.id]) ? i + 1 : null))
+    .filter((n): n is number => n !== null);
+
+  function handleAnswer(answer: Answer) {
+    // Неизменяемое обновление
+    setAnswers((prev) => ({ ...prev, [answer.taskId]: answer }));
+  }
+
+  function handleFinish() {
+    if (missedTasks.length > 0) {
+      setShowConfirm(true); // Есть пропуски — показываем предупреждение
+    } else {
+      setStatus("submitted");
+    }
+  }
+
+  function handleRestart() {
+    setAnswers({});
+    setCurrentIndex(0);
+    setStatus("in-progress");
+    setShowConfirm(false);
+  }
+
+  // Блокировка редактирования после завершения
+  if (status === "submitted") {
+    return <Overview trainingSet={mainSet} answers={answers} onRestart={handleRestart} />;
+  }
 
   return (
-    <main>
+    <div>
       <h1>{mainSet.title}</h1>
-      <p>Заданий: {mainSet.tasks.length}</p>
+      <p><strong>Заполнено:</strong> {progress.filled} / {progress.total}</p>
 
-      <TaskList
-        tasks={mainSet.tasks}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-      />
+      <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+        {/* Навигация по заданиям */}
+        <div style={{ flex: "1 1 200px" }}>
+          <TaskList 
+            tasks={tasks} 
+            currentIndex={currentIndex} 
+            answers={answers} 
+            onSelect={setCurrentIndex} 
+          />
+        </div>
 
-      {selected ? (
-        <TaskCard task={selected} />
-      ) : (
-        <p>Выберите задание из списка.</p>
+        {/* Сама форма задания */}
+        <div style={{ flex: "3 1 400px" }}>
+          <TaskCard 
+            task={currentTask} 
+            answer={answers[currentTask.id]} 
+            onChange={handleAnswer} 
+          />
+
+          <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
+            <button 
+              className="btn-secondary" 
+              onClick={() => setCurrentIndex(i => i - 1)} 
+              disabled={currentIndex === 0}
+            >
+              Назад
+            </button>
+            
+            {currentIndex < tasks.length - 1 ? (
+              <button onClick={() => setCurrentIndex(i => i + 1)}>Далее</button>
+            ) : (
+              <button onClick={handleFinish}>Завершить</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Модалка подтверждения */}
+      {showConfirm && (
+        <div className="card" style={{ borderLeft: "4px solid #dc3545" }}>
+          <p>
+            Вы не ответили на задания: <strong>{missedTasks.join(", ")}</strong>.
+          </p>
+          <p>Вы уверены, что хотите завершить попытку?</p>
+          <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+            <button className="btn-danger" onClick={() => { setShowConfirm(false); setStatus("submitted"); }}>
+              Да, завершить
+            </button>
+            <button className="btn-secondary" onClick={() => setShowConfirm(false)}>
+              Вернуться
+            </button>
+          </div>
+        </div>
       )}
-    </main>
+    </div>
   );
 }
