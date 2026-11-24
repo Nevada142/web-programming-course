@@ -1,83 +1,160 @@
-import { useReducer } from "react";
-import type { TrainingSet } from "./domain";
-import { getProgress } from "./domain";
-import { attemptReducer, initialState, isAnswered } from "./attempt";
+import { useReducer, useEffect, useState } from "react";
+import type { TrainingSet, Answer } from "./model/domain";
+import { attemptReducer, initialState } from "./model/attempt";
+import { trainerApi } from "./api/trainerApi";
 import { TaskList } from "./components/TaskList";
 import { TaskCard } from "./components/TaskCard";
-import { Overview } from "./components/Overview";
-
-import trainingSetData from "../../course/data/training-set.json";
-const mainSet = trainingSetData as TrainingSet;
+import { AttemptReview } from "./components/AttemptReview";
+import { AttemptResult } from "./components/AttemptResult";
 
 export default function App() {
   const [state, dispatch] = useReducer(attemptReducer, initialState);
+  const [trainingSet, setTrainingSet] = useState<TrainingSet | null>(null);
 
-  const tasks = mainSet.tasks;
-  const currentTask = tasks[state.currentIndex];
-  const progress = getProgress(mainSet, Object.values(state.answers));
+  // 1. ИНИЦИАЛИЗАЦИЯ (Загрузка модуля и попытки)
+  useEffect(() => {
+    async function init() {
+      try {
+        dispatch({ type: "setLoading", loading: true });
+        
+        // Загружаем модуль с сервера (используем фиксированный ID)
+        const setData = await trainerApi.getSet("web-basics");
+        setTrainingSet(setData);
 
-  // Список пропущенных
-  const missedTasks = tasks
-    .map((t, i) => (!isAnswered(t, state.answers[t.id]) ? i + 1 : null))
-    .filter((n): n is number => n !== null);
+        // Проверяем сохраненный attemptId в браузере
+        const savedId = localStorage.getItem("trainer_attemptId");
 
-  function handleFinish() {
-    if (missedTasks.length > 0) {
-      if (window.confirm(`Вы не ответили на задания: ${missedTasks.join(", ")}. Завершить?`)) {
-        dispatch({ type: "submitted" });
+        if (savedId) {
+          try {
+            const attempt = await trainerApi.getAttempt(savedId);
+            const answersObj = attempt.answers.reduce((acc, ans) => ({ ...acc, [ans.taskId]: ans }), {});
+            dispatch({ type: "init", attemptId: attempt.id, answers: answersObj, status: attempt.status });
+            return;
+          } catch (e) {
+            localStorage.removeItem("trainer_attemptId");
+          }
+        }
+
+        // Если нет сохраненного, создаем новую попытку
+        const attempt = await trainerApi.createAttempt("web-basics");
+        localStorage.setItem("trainer_attemptId", attempt.id);
+        dispatch({ type: "init", attemptId: attempt.id, answers: {}, status: "in-progress" });
+      } catch (e: any) {
+        dispatch({ type: "setError", error: "Ошибка загрузки: " + e.message });
       }
-    } else {
-      dispatch({ type: "submitted" });
+    }
+    init();
+  }, []);
+
+  // 2. ОБРАБОТЧИКИ (Сохранение и удаление)
+  async function handleAnswer(answer: Answer) {
+    if (!state.attemptId) return;
+    dispatch({ type: "answerChanged", answer }); // Мгновенно обновляем UI
+    dispatch({ type: "setLoading", loading: true });
+    try {
+      await trainerApi.saveAnswer(state.attemptId, answer);
+      dispatch({ type: "setLoading", loading: false });
+    } catch (e: any) {
+      dispatch({ type: "setError", error: "Ошибка сохранения: " + e.message });
     }
   }
 
-  // Если режим обзора — рендерим Overview
-  if (state.view === "overview") {
+  async function handleDelete(taskId: string) {
+    if (!state.attemptId) return;
+    dispatch({ type: "answerDeleted", taskId });
+    dispatch({ type: "setLoading", loading: true });
+    try {
+      await trainerApi.deleteAnswer(state.attemptId, taskId);
+      dispatch({ type: "setLoading", loading: false });
+    } catch (e: any) {
+      dispatch({ type: "setError", error: "Ошибка удаления: " + e.message });
+    }
+  }
+
+  async function handleSubmit() {
+    if (!state.attemptId) return;
+    dispatch({ type: "setLoading", loading: true });
+    try {
+      const result = await trainerApi.submitAttempt(state.attemptId);
+      dispatch({ type: "submitted", result });
+    } catch (e: any) {
+      dispatch({ type: "setError", error: "Ошибка отправки: " + e.message });
+    }
+  }
+
+  // 3. РЕНДЕР ЭКРАНОВ
+  if (state.loading && !trainingSet) return <p>Загрузка модуля...</p>;
+  if (state.error && !trainingSet) return <p style={{ color: "red" }}>{state.error}</p>;
+  if (!trainingSet) return null;
+
+  if (state.view === "result" && state.result) {
     return (
-      <Overview
-        trainingSet={mainSet}
-        state={state}
-        onRestart={() => dispatch({ type: "reset" })}
-        onBackToTasks={() => dispatch({ type: "viewChanged", view: "task" })}
-        onDeleteAnswer={(taskId) => dispatch({ type: "answerDeleted", taskId })}
-        onFinish={handleFinish}
+      <AttemptResult 
+        trainingSet={trainingSet} 
+        result={state.result} 
+        onRestart={() => {
+            localStorage.removeItem("trainer_attemptId");
+            window.location.reload();
+        }} 
       />
     );
   }
 
-  // Режим прохождения (task)
+  if (state.view === "overview") {
+    return (
+      <AttemptReview
+        trainingSet={trainingSet}
+        state={state}
+        onBack={() => dispatch({ type: "viewChanged", view: "task" })}
+        onDelete={handleDelete}
+        onFinish={handleSubmit}
+      />
+    );
+  }
+
+  const currentTask = trainingSet.tasks[state.currentIndex];
+
   return (
     <div>
-      <h1>{mainSet.title}</h1>
-      <p><strong>Заполнено:</strong> {progress.filled} / {progress.total}</p>
+      <h1>{trainingSet.title}</h1>
+      
+      {state.error && (
+        <div style={{ background: "#f8d7da", color: "#721c24", padding: "10px", marginBottom: "15px" }}>
+          {state.error}
+          <button onClick={() => dispatch({ type: "setError", error: null })} style={{ marginLeft: "10px" }}>Скрыть</button>
+        </div>
+      )}
+      
+      {state.loading && <p style={{ color: "blue" }}>Синхронизация с сервером...</p>}
+      
+      <p>Заполнено: {Object.keys(state.answers).length} / {trainingSet.tasks.length}</p>
 
-      <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 200px" }}>
-          <TaskList
-            tasks={tasks}
-            currentIndex={state.currentIndex}
-            answers={state.answers}
-            onSelect={(index) => dispatch({ type: "moved", index })}
+      <div style={{ display: "flex", gap: "20px" }}>
+        <div style={{ width: "200px" }}>
+          <TaskList 
+            tasks={trainingSet.tasks} 
+            currentIndex={state.currentIndex} 
+            answers={state.answers} 
+            onSelect={(i) => dispatch({ type: "moved", index: i })} 
           />
         </div>
 
-        <div style={{ flex: "3 1 400px" }}>
+        <div style={{ flex: 1 }}>
           <TaskCard
             task={currentTask}
             answer={state.answers[currentTask.id]}
-            onChange={(answer) => dispatch({ type: "answerChanged", answer })}
-            onDelete={() => dispatch({ type: "answerDeleted", taskId: currentTask.id })}
+            onChange={handleAnswer}
+            onDelete={() => handleDelete(currentTask.id)}
           />
-
-          <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-            <button
-              className="btn-secondary"
-              onClick={() => dispatch({ type: "moved", index: state.currentIndex - 1 })}
+          <div style={{ marginTop: "20px", display: "flex", gap: "10px" }}>
+            <button 
+              className="btn-secondary" 
+              onClick={() => dispatch({ type: "moved", index: state.currentIndex - 1 })} 
               disabled={state.currentIndex === 0}
             >
               Назад
             </button>
-            {state.currentIndex < tasks.length - 1 ? (
+            {state.currentIndex < trainingSet.tasks.length - 1 ? (
               <button onClick={() => dispatch({ type: "moved", index: state.currentIndex + 1 })}>Далее</button>
             ) : (
               <button onClick={() => dispatch({ type: "viewChanged", view: "overview" })}>К обзору</button>

@@ -1,5 +1,5 @@
-import type { TrainingSet, Task, Answer } from "./domain";
-import { findTask, filterTasks, getProgress } from "./domain";
+import type { TrainingSet, Task, Answer } from "./model/domain";
+import { findTask, filterTasks, getProgress } from "./model/domain";
 
 // ===== Типизированные литералы из JSON =====
 

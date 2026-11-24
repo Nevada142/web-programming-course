@@ -1,4 +1,4 @@
-import type { Task, Answer } from "../domain";
+import type { Task, Answer } from "../model/domain";
 
 type TaskListProps = {
   tasks: Task[];

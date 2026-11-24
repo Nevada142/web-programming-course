@@ -1,4 +1,4 @@
-import type { Task, Answer } from "../domain";
+import type { Task, Answer } from "../model/domain";
 
 type Props = {
   task: Task;
@@ -26,7 +26,7 @@ export function TaskCard({ task, answer, onChange, onDelete }: Props) {
                 type="radio"
                 name={task.id}
                 checked={answer?.kind === "single-choice" && answer.optionId === option.id}
-                onChange={() => onChange({ taskId: task.id, kind: "single-choice", optionId: option.id })}
+                onChange={() => onChange({ taskId: task.id, kind: "single-choice", optionId: option.id, })}
               />
               {option.label}
             </label>
